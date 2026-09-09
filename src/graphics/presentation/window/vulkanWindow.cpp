@@ -261,8 +261,8 @@ static void VulkanFindPhysicalDevice(vk::Instance instance, vk::SurfaceKHR surfa
 		}
 #if !defined(__APPLE__)
 		if (fragment_barycentric.fragmentShaderBarycentric != VK_TRUE) {
-			LOGF("fragmentShaderBarycentric is not supported\n");
-			skip_device = true;
+			LOGF("fragmentShaderBarycentric is not supported; pixel shaders that require "
+			     "custom/per-vertex interpolation will fail to compile\n");
 		}
 #endif
 
@@ -352,10 +352,9 @@ static void VulkanFindPhysicalDevice(vk::Instance instance, vk::SurfaceKHR surfa
 			skip_device = true;
 		}
 		if (device_features2.features.depthBounds != VK_TRUE) {
-			LOGF("depthBounds is not supported\n");
-#if !defined(__APPLE__)
-			skip_device = true;
-#endif
+			// Not a hard requirement: depthBoundsTestEnable is simply forced off for this
+			// device below (see depth_bounds_supported), same as the existing MoltenVK path.
+			LOGF("depthBounds is not supported, depth-bounds testing will be disabled\n");
 		}
 		if (device_features2.features.shaderStorageImageWriteWithoutFormat != VK_TRUE) {
 			LOGF("shaderStorageImageWriteWithoutFormat is not supported\n");
@@ -689,15 +688,21 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, const V
 	                     supported_features12.bufferDeviceAddress != VK_TRUE);
 	EXIT_NOT_IMPLEMENTED(required_features12.shaderBufferInt64Atomics == VK_TRUE &&
 	                     supported_features12.shaderBufferInt64Atomics != VK_TRUE);
-#if !defined(__APPLE__)
-	EXIT_NOT_IMPLEMENTED(supported_fragment_barycentric.fragmentShaderBarycentric != VK_TRUE);
+#if defined(__APPLE__)
+	graphics.barycentric_supported = false;
+#else
+	graphics.barycentric_supported =
+	    supported_fragment_barycentric.fragmentShaderBarycentric == VK_TRUE;
 #endif
 	vk::PhysicalDeviceFeatures device_features {};
 	device_features.fragmentStoresAndAtomics = VK_TRUE;
 	device_features.samplerAnisotropy        = VK_TRUE;
 	device_features.robustBufferAccess       = VK_TRUE;
-#if !defined(__APPLE__)
-	device_features.depthBounds = VK_TRUE; // unsupported by MoltenVK
+#if defined(__APPLE__)
+	graphics.depth_bounds_supported = false; // unsupported by MoltenVK
+#else
+	graphics.depth_bounds_supported = supported_features2.features.depthBounds == VK_TRUE;
+	device_features.depthBounds     = graphics.depth_bounds_supported ? VK_TRUE : VK_FALSE;
 #endif
 	device_features.shaderStorageImageWriteWithoutFormat = VK_TRUE;
 	device_features.shaderImageGatherExtended            = VK_TRUE;
@@ -722,8 +727,11 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, const V
 	vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR fragment_barycentric {};
 	fragment_barycentric.sType =
 	    vk::StructureType::ePhysicalDeviceFragmentShaderBarycentricFeaturesKHR;
-	fragment_barycentric.pNext                     = &features12;
-	fragment_barycentric.fragmentShaderBarycentric = VK_TRUE;
+	fragment_barycentric.pNext = &features12;
+	// Only request the feature if it's actually supported; requesting VK_TRUE for an
+	// unsupported feature would make vkCreateDevice fail validation.
+	fragment_barycentric.fragmentShaderBarycentric = graphics.barycentric_supported ? VK_TRUE
+	                                                                                : VK_FALSE;
 	robustness2.pNext                              = &fragment_barycentric;
 #endif
 	if (robustness2_ext_enabled) {
@@ -751,6 +759,17 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, const V
 	     features13.robustImageAccess == VK_TRUE ? "true" : "false",
 	     robustness2_ext_enabled && robustness2.robustImageAccess2 == VK_TRUE ? "true" : "false");
 
+	// VK_KHR_fragment_shader_barycentric is deliberately NOT part of the shared
+	// `device_extensions` list (which also gates device suitability in
+	// VulkanFindPhysicalDevice) so that devices lacking it are not rejected outright. Enable it
+	// here, only for actual device creation, only when supported.
+	std::vector<const char*> enabled_device_extensions = device_extensions;
+#if !defined(__APPLE__)
+	if (graphics.barycentric_supported) {
+		enabled_device_extensions.push_back(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME);
+	}
+#endif
+
 	vk::DeviceCreateInfo create_info {};
 	vk::PhysicalDeviceMeshShaderFeaturesEXT mesh_features {};
 	mesh_features.pNext                 = &features13;
@@ -769,8 +788,8 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, const V
 	create_info.flags                   = {};
 	create_info.pQueueCreateInfos       = &queue_create_info;
 	create_info.queueCreateInfoCount    = 1;
-	create_info.enabledExtensionCount   = static_cast<uint32_t>(device_extensions.size());
-	create_info.ppEnabledExtensionNames = device_extensions.data();
+	create_info.enabledExtensionCount   = static_cast<uint32_t>(enabled_device_extensions.size());
+	create_info.ppEnabledExtensionNames = enabled_device_extensions.data();
 	create_info.pEnabledFeatures        = &device_features;
 
 	vk::Device device = nullptr;
@@ -1101,7 +1120,9 @@ void WindowContext::CreateVulkan() {
 #else
 	device_extensions.push_back(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME);
 	device_extensions.push_back(VK_EXT_COLOR_WRITE_ENABLE_EXTENSION_NAME);
-	device_extensions.push_back(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME);
+	// VK_KHR_fragment_shader_barycentric is optional: enabled in VulkanCreateDevice only when
+	// the physical device actually supports it (see graphics.barycentric_supported), instead
+	// of being required here, so devices lacking it are no longer rejected outright.
 #endif
 
 #ifdef KYTY_ENABLE_DEBUG_PRINTF

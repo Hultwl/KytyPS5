@@ -189,7 +189,7 @@ void CollectVertexInputs(const Program& program, const ShaderVertexInputInfo* ve
 	}
 }
 
-void CollectPixelInputs(const Program& program, const ShaderPixelInputInfo* pixel,
+void CollectPixelInputs(const Program& /*program*/, const ShaderPixelInputInfo* pixel,
                         ShaderInfo& info) {
 	if (pixel->HasPositionInput()) {
 		AddInput(info, StageInputKind::FragCoord, 0, 4, "gl_FragCoord");
@@ -197,33 +197,34 @@ void CollectPixelInputs(const Program& program, const ShaderPixelInputInfo* pixe
 	if (pixel->ps_front_face) {
 		AddInput(info, StageInputKind::FrontFacing, 0, 1, "gl_FrontFacing");
 	}
-	std::array<bool, 32> per_vertex {};
-	std::array<bool, 32> interpolated {};
-	for (const auto* block: program.blocks) {
-		for (const auto& inst: *block) {
-			if (inst.GetOpcode() == ValueOpcode::GetAttribute) {
-				interpolated[inst.Arg(0).U32()] = true;
-			} else if (inst.GetOpcode() == ValueOpcode::GetInterpolationParameter) {
-				const auto input = inst.Arg(0).U32();
-				const auto mode  = inst.Arg(2).U32();
-				per_vertex[input] =
-				    per_vertex[input] || mode < 2u || !ShaderPixelParameterIsFlat(*pixel, input);
-			}
-		}
-	}
+	// NOTE: GetInterpolationParameter (GCN v_interp_p1/p2/mov) previously required a scan over
+	// every instruction here to set a per-attribute `per_vertex` flag, forcing
+	// VK_KHR_fragment_shader_barycentric to read raw, non-interpolated per-vertex data and
+	// manually reconstruct the delta-based interpolation those instructions perform on real AMD
+	// hardware.
+	//
+	// In practice, compilers targeting GCN emit v_interp_p1/p2/mov specifically to reconstruct
+	// standard smooth/flat/noperspective vertex-attribute interpolation -- not to build
+	// genuinely custom per-primitive effects. Treating every GetInterpolationParameter read as
+	// "the value the hardware would have interpolated anyway"
+	// (EmitInterpolationParameter's existing `!input->per_vertex` fallback, EmitAttribute's
+	// plain-load path) is what SharpEmu does (Gen5SpirvTranslator.cs: TryEmitInterpolation), and
+	// it's the approach validated against real games on hardware lacking the extension (e.g.
+	// Intel Gen9/UHD 620). It is an approximation -- it drops the explicit per-vertex delta math
+	// -- but it matches real-world shader usage closely enough to render correctly in practice,
+	// avoids the extension entirely, and costs nothing extra (no GS, no SSBO fetch, no
+	// primitive-ID overhead): the plain interpolated-input path below already exists and already
+	// applies the correct Flat/NoPerspective decoration from PixelParameterIsFlat/
+	// ps_no_perspective. So every input is simply treated as non-per_vertex now.
+	constexpr std::array<bool, 32> per_vertex {};
 	for (uint32_t input = 0; input < pixel->input_num; input++) {
 		AddInput(info, StageInputKind::Parameter, input, 4, fmt::format("in_param_{}", input),
 		         per_vertex[input]);
 	}
-	for (uint32_t input = 0; input < pixel->input_num; input++) {
-		if (interpolated[input] && per_vertex[input]) {
-			const auto kind = pixel->ps_no_perspective ? StageInputKind::BaryCoordNoPerspective
-			                                           : StageInputKind::BaryCoordSmooth;
-			AddInput(info, kind, 0, 3,
-			         pixel->ps_no_perspective ? "gl_BaryCoordNoPerspKHR" : "gl_BaryCoordKHR");
-			break;
-		}
-	}
+	// BaryCoordSmooth/BaryCoordNoPerspective are no longer requested: nothing sets per_vertex
+	// true anymore, so no input ever needs them. Kept only as dead capability in
+	// spirvEmitterModule.cpp/spirvEmitterFlow.cpp in case a future, more accurate fallback
+	// (e.g. per-pixel primitive fetch) is implemented and wants a real per-shader signal.
 }
 
 void CollectComputeInputs(const ShaderComputeInputInfo* compute, ShaderInfo& info) {

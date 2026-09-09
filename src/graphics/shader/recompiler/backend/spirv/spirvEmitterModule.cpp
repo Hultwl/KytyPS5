@@ -702,6 +702,16 @@ void DefineModule(EmitterState& state) {
 		state.builder.RequireCapability(CapabilityComputeDerivativeGroupQuadsKHR);
 		state.builder.RequireExtension("SPV_KHR_compute_shader_derivatives");
 	}
+	// NOTE: nothing sets InputBinding::per_vertex or emits BaryCoordSmooth/BaryCoordNoPerspective
+	// as of ShaderInfoCollection.cpp's CollectPixelInputs anymore (see the comment there): every
+	// GetInterpolationParameter read is now treated as reading the hardware-interpolated value
+	// of the attribute, same as a plain GetAttribute read, matching how SharpEmu's
+	// Gen5SpirvTranslator.TryEmitInterpolation handles the equivalent GCN v_interp_p1/p2/mov
+	// instructions. `fragment_barycentric` should therefore always be false; it and the
+	// VK_KHR_fragment_shader_barycentric requirement below are kept only as a safety net in
+	// case that invariant is ever violated by a future change, and as the hook point for a more
+	// accurate fallback (e.g. per-pixel primitive fetch, see graphicContext.h's
+	// barycentric_supported) should one be implemented later.
 	const bool fragment_barycentric =
 	    state.stage == ShaderType::Pixel &&
 	    std::any_of(state.inputs.begin(), state.inputs.end(), [](const InputBinding& input) {
@@ -709,6 +719,7 @@ void DefineModule(EmitterState& state) {
 		           input.kind == IR::StageInputKind::BaryCoordNoPerspective;
 	    });
 	if (fragment_barycentric) {
+		EXIT_NOT_IMPLEMENTED(!state.graphics_barycentric_supported);
 		state.builder.RequireCapability(CapabilityFragmentBarycentricKHR);
 		state.builder.RequireExtension("SPV_KHR_fragment_shader_barycentric");
 	}

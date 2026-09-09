@@ -30,6 +30,9 @@ struct GraphicContext {
 	bool                               rt_extensions_enabled                 = false;
 	bool                               compute_subgroup_size_control_enabled = false;
 	bool                               sample_rate_shading_enabled           = false;
+	bool                               depth_bounds_supported                = false;
+	// True when VK_KHR_fragment_shader_barycentric is available.
+	bool                               barycentric_supported                 = false;
 	bool                               attachment_feedback_loop_enabled      = false;
 	bool                               provoking_vertex_last_enabled         = false;
 	bool                               supports_block_texel_view              = false;
