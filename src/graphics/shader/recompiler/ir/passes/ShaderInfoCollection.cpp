@@ -189,42 +189,59 @@ void CollectVertexInputs(const Program& program, const ShaderVertexInputInfo* ve
 	}
 }
 
-void CollectPixelInputs(const Program& /*program*/, const ShaderPixelInputInfo* pixel,
-                        ShaderInfo& info) {
+void CollectPixelInputs(const Program& program, const ShaderPixelInputInfo* pixel,
+                        ShaderInfo& info, bool barycentric_supported) {
 	if (pixel->HasPositionInput()) {
 		AddInput(info, StageInputKind::FragCoord, 0, 4, "gl_FragCoord");
 	}
 	if (pixel->ps_front_face) {
 		AddInput(info, StageInputKind::FrontFacing, 0, 1, "gl_FrontFacing");
 	}
-	// NOTE: GetInterpolationParameter (GCN v_interp_p1/p2/mov) previously required a scan over
-	// every instruction here to set a per-attribute `per_vertex` flag, forcing
-	// VK_KHR_fragment_shader_barycentric to read raw, non-interpolated per-vertex data and
-	// manually reconstruct the delta-based interpolation those instructions perform on real AMD
-	// hardware.
-	//
-	// In practice, compilers targeting GCN emit v_interp_p1/p2/mov specifically to reconstruct
-	// standard smooth/flat/noperspective vertex-attribute interpolation -- not to build
-	// genuinely custom per-primitive effects. Treating every GetInterpolationParameter read as
-	// "the value the hardware would have interpolated anyway"
-	// (EmitInterpolationParameter's existing `!input->per_vertex` fallback, EmitAttribute's
-	// plain-load path) is what SharpEmu does (Gen5SpirvTranslator.cs: TryEmitInterpolation), and
-	// it's the approach validated against real games on hardware lacking the extension (e.g.
-	// Intel Gen9/UHD 620). It is an approximation -- it drops the explicit per-vertex delta math
-	// -- but it matches real-world shader usage closely enough to render correctly in practice,
-	// avoids the extension entirely, and costs nothing extra (no GS, no SSBO fetch, no
-	// primitive-ID overhead): the plain interpolated-input path below already exists and already
-	// applies the correct Flat/NoPerspective decoration from PixelParameterIsFlat/
-	// ps_no_perspective. So every input is simply treated as non-per_vertex now.
-	constexpr std::array<bool, 32> per_vertex {};
+	// GetInterpolationParameter (GCN v_interp_p1/p2/mov) can require raw, non-interpolated
+	// per-vertex data reconstructed via VK_KHR_fragment_shader_barycentric. When the device
+	// doesn't support that extension (barycentric_supported == false), every such read is
+	// instead treated as reading the value the hardware would already have interpolated --
+	// matching how SharpEmu's Gen5SpirvTranslator.TryEmitInterpolation handles the same
+	// instructions. This is an approximation (it drops the explicit per-vertex delta math) but
+	// matches real-world shader usage closely enough to render correctly on GPUs lacking the
+	// extension (e.g. Intel Gen9/UHD 620 on Mesa anv), at no extra runtime cost. When the
+	// extension *is* supported, this keeps the original exact behavior so no shader loses
+	// precision on capable hardware.
+	std::array<bool, 32> per_vertex {};
+	std::array<bool, 32> interpolated {};
+	if (barycentric_supported) {
+		for (const auto* block: program.blocks) {
+			for (const auto& inst: *block) {
+				if (inst.GetOpcode() == ValueOpcode::GetAttribute) {
+					interpolated[inst.Arg(0).U32()] = true;
+				} else if (inst.GetOpcode() == ValueOpcode::GetInterpolationParameter) {
+					const auto input = inst.Arg(0).U32();
+					const auto mode  = inst.Arg(2).U32();
+					per_vertex[input] = per_vertex[input] || mode < 2u ||
+					                    !ShaderPixelParameterIsFlat(*pixel, input);
+				}
+			}
+		}
+	}
 	for (uint32_t input = 0; input < pixel->input_num; input++) {
 		AddInput(info, StageInputKind::Parameter, input, 4, fmt::format("in_param_{}", input),
 		         per_vertex[input]);
 	}
-	// BaryCoordSmooth/BaryCoordNoPerspective are no longer requested: nothing sets per_vertex
-	// true anymore, so no input ever needs them. Kept only as dead capability in
-	// spirvEmitterModule.cpp/spirvEmitterFlow.cpp in case a future, more accurate fallback
-	// (e.g. per-pixel primitive fetch) is implemented and wants a real per-shader signal.
+	if (barycentric_supported) {
+		for (uint32_t input = 0; input < pixel->input_num; input++) {
+			if (interpolated[input] && per_vertex[input]) {
+				const auto kind = pixel->ps_no_perspective
+				                      ? StageInputKind::BaryCoordNoPerspective
+				                      : StageInputKind::BaryCoordSmooth;
+				AddInput(info, kind, 0, 3,
+				         pixel->ps_no_perspective ? "gl_BaryCoordNoPerspKHR" : "gl_BaryCoordKHR");
+				break;
+			}
+		}
+	}
+	// When !barycentric_supported, per_vertex stays all-false and the scan above is skipped
+	// entirely, so BaryCoordSmooth/BaryCoordNoPerspective are never requested -- matching the
+	// extension being unavailable on this device.
 }
 
 void CollectComputeInputs(const ShaderComputeInputInfo* compute, ShaderInfo& info) {
@@ -379,7 +396,9 @@ void CollectShaderInfo(Program& program, const ShaderInfoOptions& options) {
 	switch (program.stage) {
 		case ShaderType::Vertex: CollectVertexInputs(program, options.vertex, next); break;
 		case ShaderType::Mesh: break;
-		case ShaderType::Pixel: CollectPixelInputs(program, options.pixel, next); break;
+		case ShaderType::Pixel:
+			CollectPixelInputs(program, options.pixel, next, options.barycentric_supported);
+			break;
 		case ShaderType::Compute: CollectComputeInputs(options.compute, next); break;
 		default: return Fail("unsupported shader stage for info collection");
 	}

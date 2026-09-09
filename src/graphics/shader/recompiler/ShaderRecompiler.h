@@ -23,6 +23,11 @@ struct CompileOptions {
 	std::span<const uint32_t>   user_data;
 	std::span<const uint32_t>   back_code;
 	ShaderStageInputInfo        input_info;
+	// Mirrors GraphicContext::barycentric_supported (graphicContext.h): true when the device
+	// supports VK_KHR_fragment_shader_barycentric. Defaults to true so existing callers that
+	// don't set it (tests, etc.) keep today's exact behavior. See ShaderInfoOptions and
+	// EmitterState::graphics_barycentric_supported for where this is actually consumed.
+	bool                        barycentric_supported      = true;
 };
 
 struct TranslateResult {

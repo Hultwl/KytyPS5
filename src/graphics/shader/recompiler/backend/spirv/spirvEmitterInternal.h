@@ -359,12 +359,12 @@ struct EmitterState {
 	const IR::Program&                               program;
 	ShaderStageInputInfo                             input_info;
 	const IR::SpirvRequirements&                     requirements;
-	// TODO(barycentric-fallback): defaults to true (preserves today's behavior on capable GPUs)
-	// because shader translation currently has no visibility into GraphicContext/device
-	// capabilities. Wire this to graphics.barycentric_supported (graphicContext.h) so the
-	// EXIT_NOT_IMPLEMENTED guard in DefineModule() actually reflects device support instead of
-	// always assuming it; until then, GPUs lacking the extension will still fail, just via
-	// driver validation at pipeline creation rather than this clearer assert.
+	// Mirrors GraphicContext::barycentric_supported (graphicContext.h), set by EmitProgram()'s
+	// caller from CompileOptions::barycentric_supported. When false,
+	// ShaderInfoCollection.cpp's CollectPixelInputs never marks an input per_vertex, so
+	// `fragment_barycentric` below can never become true; the EXIT_NOT_IMPLEMENTED guard exists
+	// only as a safety net in case that invariant is ever violated. Defaults to true so existing
+	// callers (tests, etc.) keep today's exact behavior.
 	bool                                              graphics_barycentric_supported = true;
 	ShaderType                                       stage                   = ShaderType::Unknown;
 	uint32_t                                         lane_count              = 1;

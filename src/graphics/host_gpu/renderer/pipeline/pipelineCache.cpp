@@ -342,6 +342,7 @@ struct PipelineCache::ProgramCache {
 		options.early_dump  = options.dump_ir;
 		options.dump_label  = label;
 		options.input_info  = stage_input;
+		options.barycentric_supported = barycentric_supported;
 		options.scratch_dwords = input_info.scratch_size_dwords;
 		if constexpr (std::is_same_v<InputInfo, ShaderVertexInputInfo>) {
 			options.user_data_base = 8;
@@ -379,7 +380,8 @@ struct PipelineCache::ProgramCache {
 		return permutation.handle;
 	}
 
-	explicit ProgramCache(vk::Device device): device(device) {
+	explicit ProgramCache(vk::Device device, bool barycentric_supported)
+	    : device(device), barycentric_supported(barycentric_supported) {
 		lookup_key.static_state.reserve(MaxStaticKeyWords);
 	}
 	~ProgramCache() {
@@ -394,11 +396,17 @@ struct PipelineCache::ProgramCache {
 	std::unordered_map<ProgramKey, SourceEntry, ProgramKeyHash> programs;
 	ProgramKey                                                  lookup_key;
 	vk::Device                                                  device;
+	// Mirrors GraphicContext::barycentric_supported; threaded into CompileOptions for every
+	// shader compiled through this cache so ShaderInfoCollection.cpp/the SPIR-V emitter never
+	// requests VK_KHR_fragment_shader_barycentric on a device that doesn't support it.
+	bool                                                         barycentric_supported = true;
 	uint64_t                                                    next_shader_id = 0;
 };
 
 PipelineCache::PipelineCache(GraphicContext& graphics)
-    : m_graphics(graphics), m_program_cache(std::make_unique<ProgramCache>(graphics.device)) {
+    : m_graphics(graphics),
+      m_program_cache(
+          std::make_unique<ProgramCache>(graphics.device, graphics.barycentric_supported)) {
 	EXIT_NOT_IMPLEMENTED(!Common::Thread::IsMainThread());
 	InitializeDriverCache();
 }
