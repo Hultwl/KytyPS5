@@ -25,8 +25,10 @@ struct CompileOptions {
 	ShaderStageInputInfo        input_info;
 	// Mirrors GraphicContext::barycentric_supported (graphicContext.h): true when the device
 	// supports VK_KHR_fragment_shader_barycentric. Defaults to true so existing callers that
-	// don't set it (tests, etc.) keep today's exact behavior. See ShaderInfoOptions and
-	// EmitterState::graphics_barycentric_supported for where this is actually consumed.
+	// don't set it (tests, etc.) keep today's exact behavior. Consumed by
+	// ShaderInfoCollection.cpp's CollectPixelInputs to decide whether pixel inputs are marked
+	// per_vertex. NOT forwarded to EmitterState::graphics_barycentric_supported -- see the
+	// comment on that field and in SpirvEmitter.cpp's EmitProgram() for why.
 	bool                        barycentric_supported      = true;
 };
 

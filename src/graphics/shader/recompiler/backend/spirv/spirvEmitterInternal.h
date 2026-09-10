@@ -359,12 +359,15 @@ struct EmitterState {
 	const IR::Program&                               program;
 	ShaderStageInputInfo                             input_info;
 	const IR::SpirvRequirements&                     requirements;
-	// Mirrors GraphicContext::barycentric_supported (graphicContext.h), set by EmitProgram()'s
-	// caller from CompileOptions::barycentric_supported. When false,
-	// ShaderInfoCollection.cpp's CollectPixelInputs never marks an input per_vertex, so
-	// `fragment_barycentric` below can never become true; the EXIT_NOT_IMPLEMENTED guard exists
-	// only as a safety net in case that invariant is ever violated. Defaults to true so existing
-	// callers (tests, etc.) keep today's exact behavior.
+	// NOT wired to GraphicContext::barycentric_supported / CompileOptions::barycentric_supported.
+	// EmitProgram() deliberately leaves this at its default (true) -- see the comment there for
+	// why (ps_perspective_center_vgpr has no fallback approximation and needs to keep working on
+	// drivers, like Mesa ANV on Intel Gen9/UHD 620, that tolerate the SPIR-V capability being
+	// declared without the extension formally enabled). The real device capability is still used
+	// by ShaderInfoCollection.cpp's CollectPixelInputs to decide whether an input is marked
+	// per_vertex; on devices that report no support, inputs are never marked per_vertex, so
+	// `fragment_barycentric` below can never become true and the EXIT_NOT_IMPLEMENTED guard here
+	// is just a safety net for that invariant, not a live gate on device support.
 	bool                                              graphics_barycentric_supported = true;
 	ShaderType                                       stage                   = ShaderType::Unknown;
 	uint32_t                                         lane_count              = 1;
