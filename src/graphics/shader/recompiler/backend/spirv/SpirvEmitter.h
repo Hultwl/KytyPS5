@@ -11,8 +11,7 @@ namespace Libs::Graphics::ShaderRecompiler::Spirv {
 
 void AnalyzeProgramRequirements(IR::Program& program);
 
-std::vector<uint32_t> EmitProgram(const IR::Program& program, ShaderStageInputInfo input_info,
-                                  bool barycentric_supported = true);
+std::vector<uint32_t> EmitProgram(const IR::Program& program, ShaderStageInputInfo input_info);
 
 } // namespace Libs::Graphics::ShaderRecompiler::Spirv
 

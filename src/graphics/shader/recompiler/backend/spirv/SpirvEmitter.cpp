@@ -303,8 +303,7 @@ void AnalyzeProgramRequirements(IR::Program& program) {
 	program.spirv_requirements.emplace(requirements);
 }
 
-std::vector<uint32_t> EmitProgram(const IR::Program& program, ShaderStageInputInfo input_info,
-                                  bool barycentric_supported) {
+std::vector<uint32_t> EmitProgram(const IR::Program& program, ShaderStageInputInfo input_info) {
 	using namespace Emitter;
 
 	if (program.stage != ShaderType::Compute && program.stage != ShaderType::Vertex &&
@@ -319,17 +318,18 @@ std::vector<uint32_t> EmitProgram(const IR::Program& program, ShaderStageInputIn
 	ValidateNativeProgram(program);
 	IR::ValidateProgram(program, true);
 	EmitterState state(program, input_info);
-	// NOTE: graphics_barycentric_supported is deliberately left at its default (true) here,
-	// not set from `barycentric_supported`. Some drivers (e.g. Mesa ANV on Intel Gen9/UHD 620)
-	// tolerate a shader declaring the SPV_KHR_fragment_shader_barycentric capability/extension
-	// in its SPIR-V even when VK_KHR_fragment_shader_barycentric isn't formally supported/
-	// enabled on the VkDevice -- the capability declaration alone doesn't get strictly
-	// validated against the enabled extension list at pipeline-creation time on those drivers.
-	// EXIT_NOT_IMPLEMENTED(!state.graphics_barycentric_supported) in DefineModule() is kept as
-	// a safety net for drivers where that assumption doesn't hold, but wiring this to the real
-	// device capability made it fire for the ps_perspective_center_vgpr path (Translate.cpp),
-	// which -- unlike GetInterpolationParameter -- has no approximation and genuinely needs
-	// real barycentric data, yet was working in practice. Left permissive to match.
+	// graphics_barycentric_supported is intentionally left at its EmitterState default (true)
+	// rather than threaded through from the caller's device capability. Some drivers (e.g. Mesa
+	// ANV on Intel Gen9/UHD 620) tolerate a shader declaring the
+	// SPV_KHR_fragment_shader_barycentric capability/extension in its SPIR-V even when
+	// VK_KHR_fragment_shader_barycentric isn't formally supported/enabled on the VkDevice -- the
+	// capability declaration alone doesn't get strictly validated against the enabled extension
+	// list at pipeline-creation time on those drivers. Gating it on the real device capability
+	// made EXIT_NOT_IMPLEMENTED(!state.graphics_barycentric_supported) in DefineModule() fire for
+	// the ps_perspective_center_vgpr path (Translate.cpp), which -- unlike
+	// GetInterpolationParameter -- has no approximation and genuinely needs real barycentric
+	// data, yet was working in practice. Left permissive to match; that EXIT_NOT_IMPLEMENTED is
+	// therefore currently unreachable and only guards against a future change to this default.
 	state.stage = program.stage;
 	const auto* workgroup = ShaderWorkgroupInput(program.stage, input_info);
 	state.lane_count =
