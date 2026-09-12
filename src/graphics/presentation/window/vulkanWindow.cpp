@@ -339,10 +339,9 @@ static void VulkanFindPhysicalDevice(vk::Instance instance, vk::SurfaceKHR surfa
 			skip_device = true;
 		}
 		if (device_features2.features.depthBounds != VK_TRUE) {
-			LOGF("depthBounds is not supported\n");
-#if !defined(__APPLE__)
-			skip_device = true;
-#endif
+			// Not a hard requirement: depthBoundsTestEnable is simply forced off for this
+			// device below (see depth_bounds_supported), same as the existing MoltenVK path.
+			LOGF("depthBounds is not supported, depth-bounds testing will be disabled\n");
 		}
 		if (device_features2.features.shaderStorageImageWriteWithoutFormat != VK_TRUE) {
 			LOGF("shaderStorageImageWriteWithoutFormat is not supported\n");
@@ -610,8 +609,11 @@ static vk::Device VulkanCreateDevice(GraphicContext& graphics,
 	device_features.fragmentStoresAndAtomics = VK_TRUE;
 	device_features.samplerAnisotropy        = VK_TRUE;
 	device_features.robustBufferAccess       = VK_TRUE;
-#if !defined(__APPLE__)
-	device_features.depthBounds = VK_TRUE; // unsupported by MoltenVK
+#if defined(__APPLE__)
+	graphics.depth_bounds_supported = false; // unsupported by MoltenVK
+#else
+	graphics.depth_bounds_supported = supported_features2.features.depthBounds == VK_TRUE;
+	device_features.depthBounds     = graphics.depth_bounds_supported ? VK_TRUE : VK_FALSE;
 #endif
 	device_features.shaderStorageImageWriteWithoutFormat = VK_TRUE;
 	device_features.shaderImageGatherExtended            = VK_TRUE;
